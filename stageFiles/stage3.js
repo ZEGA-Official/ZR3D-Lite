@@ -111,7 +111,6 @@ const engine = () => {
         let movedBack = new Vertex(rotated.x + center.x, rotated.y + center.y, rotated.z + center.z);
         let proj2D = multMat(proj, movedBack);
         
-        // drawVertex(proj2D.x, proj2D.y);
         projected.push(proj2D);
     }
 

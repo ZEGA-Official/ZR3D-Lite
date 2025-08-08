@@ -394,12 +394,9 @@ class Cube {
 }
 
 
-// const cube1 = new Cube({ x: 0, y: 100, z: 0, w: 250, h: 100, d: 400 });
-// const cube2 = new Cube({ x: 0, y: 0, z: 50, w: 250, h: 100, d: 300 });
-// const cube3 = new Cube({ x: 0, y: -100, z: 100, w: 250, h: 100, d: 200 });
-const cube1 = new Cube({ x: 300, y: 100, z: 0, w: 200, h: 100, d: 300 });
-const cube2 = new Cube({ x: 100, y: 100, z: 0, w: 100, h: 600, d: 100 });
-const cube3 = new Cube({ x: 600, y: 300, z: 0 });
+const cube1 = new Cube({ x: 0, y: 100, z: 0, w: 250, h: 100, d: 400 });
+const cube2 = new Cube({ x: 0, y: 0, z: 50, w: 250, h: 100, d: 300 });
+const cube3 = new Cube({ x: 0, y: -100, z: 100, w: 250, h: 100, d: 200 });
 const cube4 = new Cube({ ...lightPos, w: 50, h: 50, d: 50, isL: true });
 
 const sphere1 = new Sphere({ x: 0, y: -300, z: 50, r: 100 });
@@ -407,10 +404,6 @@ const sphere1 = new Sphere({ x: 0, y: -300, z: 50, r: 100 });
 
 const cubes = [cube1, cube2, cube3, cube4];
 const spheres = [sphere1];
-
-const init = () => {
-
-}
 
 
 const projectWorld = (obj, objIndex, queue) => {
@@ -498,7 +491,16 @@ const projectWorld = (obj, objIndex, queue) => {
 let lVelx = 0;
 let lVelz = 0;
 
+let lastTime = performance.now();
+let frameCount = 0;
+let fps = 0;
+
 const engine = () => {
+
+    ctx.clearRect(0, 0, cvs.width, cvs.height);
+    ctx.fillStyle = 'black';
+    ctx.fillRect(0, 0, cvs.width, cvs.height)
+
     // Camera control
     if (K.W) cameraRotX -= 0.02;
     if (K.S) cameraRotX += 0.02;
@@ -516,9 +518,7 @@ const engine = () => {
     }
 
 
-    ctx.clearRect(0, 0, cvs.width, cvs.height);
-    ctx.fillStyle = 'black';
-    ctx.fillRect(0, 0, cvs.width, cvs.height);
+
 
     let objQueue = [];
     let lightCube = cubes[3];
@@ -541,7 +541,7 @@ const engine = () => {
         }
     });
 
-      spheres.forEach((s, i) => {
+    spheres.forEach((s, i) => {
         projectWorld(s, i, objQueue);
 
         s.calcLighting({ x: lightCube.x, y: lightCube.y, z: lightCube.z });
@@ -576,12 +576,24 @@ const engine = () => {
 
             drawTriangle(sq.p1, sq.p2, sq.p3, 'white', bri);
 
-         
+
         }
     }
+
+    const now = performance.now();
+    frameCount++;
+
+    if (now - lastTime >= 1000) {
+        fps = frameCount;
+        frameCount = 0;
+        lastTime = now;
+    }
+
+    ctx.fillStyle = 'white';
+    ctx.font = `10px arcadeclassic`;
+    ctx.fillText(fps, 50, 50);
 
     requestAnimationFrame(engine);
 }
 
-init();
 engine();

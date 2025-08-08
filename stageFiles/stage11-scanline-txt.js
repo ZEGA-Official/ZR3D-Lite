@@ -287,7 +287,7 @@ const engine = () => {
         drawLine(f.p3.x, f.p3.y, f.p4.x, f.p4.y);
         drawLine(f.p4.x, f.p4.y, f.p1.x, f.p1.y);
 
-        // drawTxOnFace(f.p1, f.p4, f.p2, f.p3);
+        drawTxOnFace(f.p1, f.p4, f.p2, f.p3);
     }
 
     requestAnimationFrame(engine);

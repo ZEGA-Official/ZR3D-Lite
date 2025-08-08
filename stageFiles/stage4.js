@@ -86,7 +86,7 @@ const triangles = [];
 const init = () => {
     P.length = 0; // Clear existing points
     const radius = 150;
-    const segments = 20; // Higher = smoother
+    const segments = 40; // Higher = smoother
 
     for (let i = 0; i <= segments; i++) {
         const theta = i * Math.PI / segments; // latitude
