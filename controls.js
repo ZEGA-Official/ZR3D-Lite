@@ -1,134 +1,145 @@
 /**
- * controls.js — Z-TEAM WASM Input Bridge
+ * controls.js — Z-TEAM Input System (Self-Contained WASM)
  *
- * Loads controls.wasm, maps DOM key events → WASM bitfield, and exposes:
- *   K        — live read-only Proxy over the WASM state (same API as before)
- *   controls — registers all listeners (call once, idempotent)
+ * Zero external dependencies — WASM binary is embedded as base64.
+ * Drop this file in your project and go.
  *
- * Key IDs (must match controls.c):
+ * Exports:
+ *   K          — live Proxy, same API as the original object literal
+ *   controls() — registers DOM listeners (idempotent)
+ *   loadWasm() — explicit init (auto-called by controls())
+ *
+ * WASM internals (compiled from WAT, 198 bytes):
+ *   key_down(id)  — set bit, blocks if opposite key is held
+ *   key_up(id)    — clear bit
+ *   get_state()   — return packed uint16 bitfield
+ *   reset_state() — zero all keys (called on window blur)
+ *
+ * Key ID table (mirrors WASM opposites data segment):
  *   r=0  l=1  u=2  d=3  W=4  A=5  S=6  D=7  Q=8  E=9
- *
- * Usage:
- *   import { K, controls } from './controls.js';
- *   controls();                   // hook up input
- *   if (K.W && K.r) { ... }       // same API as before
+ * Opposite pairs: (r<->l) (u<->d) (W<->S) (A<->D) (Q<->E)
  */
 
-// ── Key ID constants (mirrors controls.c) ─────────────────────────────
+// ── Embedded WASM (compiled WAT -> binary -> base64, 198 bytes) ───────
+const WASM_B64 =
+    'AGFzbQEAAAABDANgAX8AYAABf2AAAAMFBAAAAQIFAwEAAQYGAX8BQQALBzUFA21lbQIA' +
+    'CGtleV9kb3duAAAGa2V5X3VwAAEJZ2V0X3N0YXRlAAILcmVzZXRfc3RhdGUAAwpRBC' +
+    'oBAX8gAEEKTwRADwsgAC0AACEBIwBBASABdHEEQA8LIwBBASAAdHIkAAsYACAAQQpP' +
+    'BEAPCyMAQQEgAHRBf3NxJAALBAAjAAsGAEEAJAALCxABAEEACwoBAAMCBgcEBQkI';
+
+// ── Key ID constants ──────────────────────────────────────────────────
 const KEY_ID = Object.freeze({
     r: 0, l: 1, u: 2, d: 3,
     W: 4, A: 5, S: 6, D: 7,
     Q: 8, E: 9,
 });
 
-// ── DOM key → [K property name, key ID] ───────────────────────────────
+// ── DOM key string -> [K prop, WASM id] ──────────────────────────────
 const KEY_MAP = Object.freeze({
-    ArrowRight: ['r', KEY_ID.r],
-    ArrowLeft:  ['l', KEY_ID.l],
-    ArrowUp:    ['u', KEY_ID.u],
-    ArrowDown:  ['d', KEY_ID.d],
-    w:          ['W', KEY_ID.W],
-    a:          ['A', KEY_ID.A],
-    s:          ['S', KEY_ID.S],
-    d:          ['D', KEY_ID.D],
-    q:          ['Q', KEY_ID.Q],
-    e:          ['E', KEY_ID.E],
+    ArrowRight: ['r', 0],
+    ArrowLeft:  ['l', 1],
+    ArrowUp:    ['u', 2],
+    ArrowDown:  ['d', 3],
+    w:          ['W', 4],
+    a:          ['A', 5],
+    s:          ['S', 6],
+    d:          ['D', 7],
+    q:          ['Q', 8],
+    e:          ['E', 9],
 });
 
-// ── WASM module singleton ──────────────────────────────────────────────
-let _wasm = null;   // { key_down, key_up, get_state, reset_state }
+// ── WASM runtime ──────────────────────────────────────────────────────
+let _wasm  = null;
 let _ready = false;
+let _initP = null;  // in-flight promise guard
 
-/**
- * loadWasm(url) — fetch, compile, and instantiate controls.wasm.
- * Returns a Promise that resolves once the module is live.
- * Safe to await multiple times — only instantiates once.
- *
- * @param {string} [url='./controls.wasm']
- * @returns {Promise<void>}
- */
-async function loadWasm(url = './controls.wasm') {
-    if (_ready) return;
-
-    // Prefer streaming instantiation (single parse pass, fastest path).
-    const instantiate = typeof WebAssembly.instantiateStreaming === 'function'
-        ? () => WebAssembly.instantiateStreaming(fetch(url), {})
-        : async () => {
-              const buf = await (await fetch(url)).arrayBuffer();
-              return WebAssembly.instantiate(buf, {});
-          };
-
-    const { instance } = await instantiate();
-    const exp = instance.exports;
-
-    _wasm = {
-        key_down:    /** @type {(id: number) => void}   */ (exp.key_down),
-        key_up:      /** @type {(id: number) => void}   */ (exp.key_up),
-        get_state:   /** @type {() => number}            */ (exp.get_state),
-        reset_state: /** @type {() => void}              */ (exp.reset_state),
-    };
-    _ready = true;
+/** Decode base64 -> Uint8Array without atob length limits. */
+function _b64ToBytes(b64) {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
 }
 
-// ── K — live Proxy that reads the WASM bitfield ────────────────────────
 /**
- * K mirrors the original object literal API.
- * Reading K.W returns true if the W key is currently held.
- * Writing K.* is a no-op (state is owned by WASM).
+ * loadWasm() — instantiate the embedded WASM module.
+ * Idempotent + concurrent-safe: multiple callers get same Promise.
+ * @returns {Promise<void>}
+ */
+function loadWasm() {
+    if (_ready) return Promise.resolve();
+    if (_initP) return _initP;
+
+    _initP = WebAssembly
+        .instantiate(_b64ToBytes(WASM_B64), {})
+        .then(({ instance }) => {
+            const e = instance.exports;
+            _wasm = {
+                key_down:    e.key_down,
+                key_up:      e.key_up,
+                get_state:   e.get_state,
+                reset_state: e.reset_state,
+            };
+            _ready = true;
+        });
+
+    return _initP;
+}
+
+// ── K — live Proxy over the WASM bitfield ─────────────────────────────
+/**
+ * K.r / K.l / K.u / K.d / K.W / K.A / K.S / K.D / K.Q / K.E
+ *
+ * Each property read calls get_state() + bit-tests inline.
+ * Writes are silently rejected — WASM owns the state.
  *
  * @type {{ r:boolean, l:boolean, u:boolean, d:boolean,
  *          W:boolean, A:boolean, S:boolean, D:boolean,
  *          Q:boolean, E:boolean }}
  */
-const K = new Proxy(Object.freeze({ r:false, l:false, u:false, d:false,
-                                    W:false, A:false, S:false, D:false,
-                                    Q:false, E:false }),
-{
-    get(_, prop) {
-        if (!_ready || !(prop in KEY_ID)) return false;
-        // Single WASM call per frame read — bit-test inline.
-        return (/** @type {number} */ (_wasm.get_state()) & (1 << KEY_ID[prop])) !== 0;
-    },
-    set() {
-        // State is owned by WASM — reject all JS-side writes.
-        return true;
-    },
-});
+const K = new Proxy(
+    Object.freeze({ r:false, l:false, u:false, d:false,
+                    W:false, A:false, S:false, D:false,
+                    Q:false, E:false }),
+    {
+        get(_, prop) {
+            const id = KEY_ID[prop];
+            if (id === undefined || !_ready) return false;
+            return (_wasm.get_state() >>> id & 1) === 1;
+        },
+        set() { return true; },  // reject all writes
+    }
+);
 
-// ── controls() — idempotent listener registration ─────────────────────
+// ── controls() — idempotent DOM listener setup ────────────────────────
 let _registered = false;
 
 /**
- * controls() — attach keydown / keyup / blur listeners to document.
- * Idempotent: safe to call multiple times, wires up only once.
- * Mirrors the original function signature exactly.
- *
- * Must be called after loadWasm() resolves (or it queues gracefully).
+ * controls() — attach keydown / keyup / blur listeners.
+ * Kicks off loadWasm() automatically. Safe to call multiple times.
+ * Same function name as the original — zero migration cost.
  */
 function controls() {
+    if (!_ready && !_initP) loadWasm();
     if (_registered) return;
     _registered = true;
 
-    /**
-     * Fast path: look up key in KEY_MAP, call into WASM.
-     * Unknown keys take zero branches after the map miss.
-     */
     document.addEventListener('keydown', (e) => {
-        if (e.repeat) return;           // ignore held-key auto-repeat
+        if (e.repeat || !_ready) return;
         const entry = KEY_MAP[e.key];
-        if (entry && _ready) _wasm.key_down(entry[1]);
+        if (entry) _wasm.key_down(entry[1]);
     }, { passive: true });
 
     document.addEventListener('keyup', (e) => {
+        if (!_ready) return;
         const entry = KEY_MAP[e.key];
-        if (entry && _ready) _wasm.key_up(entry[1]);
+        if (entry) _wasm.key_up(entry[1]);
     }, { passive: true });
 
-    // Zero all keys when the window loses focus — prevents stuck keys.
+    // Zero all bits on focus loss — prevents stuck keys
     window.addEventListener('blur', () => {
         if (_ready) _wasm.reset_state();
     }, { passive: true });
 }
 
-// ── Public API ─────────────────────────────────────────────────────────
 export { K, controls, loadWasm, KEY_ID, KEY_MAP };
